@@ -27,7 +27,11 @@ A lightweight prototype for scoring and monitoring text outputs from open-weight
    ```bash
    streamlit run dashboard/app.py
    ```
+## Image safety assessment
 
+- Upload an AI-generated image in the dashboard.
+- The backend evaluates the image with a prototype visual-risk heuristic.
+- Results include graphic sensitivity, violence risk, and NSFW risk scores.
 ## Notes
 
 - The backend stores scored outputs in `app/safety_history.db`.

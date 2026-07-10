@@ -3,3 +3,6 @@ uvicorn[standard]
 streamlit
 pydantic
 requests
+Pillow
+python-multipart
+moviepy

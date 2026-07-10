@@ -18,6 +18,19 @@ CREATE TABLE IF NOT EXISTS scored_outputs (
 );
 """
 
+CREATE_IMAGE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS scored_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT NOT NULL,
+    graphic REAL NOT NULL,
+    violence REAL NOT NULL,
+    nsfw REAL NOT NULL,
+    overall_score REAL NOT NULL,
+    label TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -29,6 +42,7 @@ def init_db() -> None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(CREATE_TABLE_SQL)
+    cursor.execute(CREATE_IMAGE_TABLE_SQL)
     conn.commit()
     conn.close()
 
@@ -52,11 +66,42 @@ def save_result(record: Dict) -> None:
     conn.close()
 
 
+def save_image_result(record: Dict) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO scored_images (filename, graphic, violence, nsfw, overall_score, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            record["filename"],
+            record["graphic"],
+            record["violence"],
+            record["nsfw"],
+            record["overall_score"],
+            record["label"],
+            datetime.utcnow().isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_history(limit: int = 50) -> List[Dict]:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT id, text, toxicity, bias, disallowed, overall_score, label, created_at FROM scored_outputs ORDER BY id DESC LIMIT ?",
+        (limit,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_image_history(limit: int = 50) -> List[Dict]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, filename, graphic, violence, nsfw, overall_score, label, created_at FROM scored_images ORDER BY id DESC LIMIT ?",
         (limit,),
     )
     rows = cursor.fetchall()
