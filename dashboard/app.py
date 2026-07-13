@@ -1,3 +1,4 @@
+import os
 import time
 from io import BytesIO
 
@@ -5,7 +6,34 @@ from PIL import Image
 import requests
 import streamlit as st
 
-API_URL = "https://aistproject.streamlit.app/"
+
+def get_api_url() -> str:
+    configured_url = os.getenv("API_URL", "").strip() or os.getenv("BACKEND_URL", "").strip()
+    if configured_url:
+        return configured_url.rstrip("/")
+    return "http://127.0.0.1:8000"
+
+
+API_URL = get_api_url()
+
+
+def request_json(method: str, path: str, **kwargs):
+    url = f"{API_URL}{path}"
+    try:
+        response = requests.request(method, url, timeout=10, **kwargs)
+    except requests.RequestException as exc:
+        return None, f"Unable to reach backend: {exc}"
+
+    if not response.ok:
+        detail = response.text[:300].strip().replace("\n", " ")
+        return None, f"Backend returned status {response.status_code}: {detail or 'no details'}"
+
+    try:
+        return response.json(), None
+    except ValueError as exc:
+        detail = response.text[:300].strip().replace("\n", " ")
+        return None, f"Backend returned invalid JSON: {detail or str(exc)}"
+
 
 st.set_page_config(page_title="AI Safety Toolkit", layout="wide")
 st.title("AI Safety Toolkit for Open-Weight Model Outputs")
@@ -70,11 +98,12 @@ with tabs[0]:
         else:
             with st.spinner("Calculating text risk score..."):
                 start = time.perf_counter()
-                response = requests.post(f"{API_URL}/score", json={"text": text_input})
+                data, error = request_json("post", "/score", json={"text": text_input})
                 elapsed = time.perf_counter() - start
 
-            if response.status_code == 200:
-                data = response.json()
+            if error:
+                st.error(f"Failed to score text: {error}")
+            else:
                 # persist until next score or reload
                 st.session_state["last_text_result"] = data
                 label = data.get("label", "unknown")
@@ -89,13 +118,12 @@ with tabs[0]:
                 st.caption(f"Estimated calculation time: {elapsed:.2f} seconds")
                 if data.get("explanation"):
                     st.markdown("**Why:**  \n" + data.get("explanation").replace("\n", "  \n"))
-            else:
-                st.error("Failed to score text. Is the backend running?")
 
     st.write("### Recent text scoring history")
-    history_resp = requests.get(f"{API_URL}/history")
-    if history_resp.status_code == 200:
-        history = history_resp.json()
+    history, error = request_json("get", "/history")
+    if error:
+        st.error(f"Could not load history from backend: {error}")
+    else:
         if history:
             for item in history:
                 st.markdown(
@@ -106,8 +134,6 @@ with tabs[0]:
                 st.markdown("---")
         else:
             st.info("No text scoring history yet.")
-    else:
-        st.error("Could not load history from backend.")
 
 with tabs[1]:
     st.subheader("Image safety assessment")
@@ -160,11 +186,12 @@ with tabs[1]:
             with st.spinner("Calculating image risk score..."):
                 start = time.perf_counter()
                 files = {"file": (uploaded_file.name, image_bytes, uploaded_file.type)}
-                response = requests.post(f"{API_URL}/score-image", files=files)
+                data, error = request_json("post", "/score-image", files=files)
                 elapsed = time.perf_counter() - start
 
-            if response.status_code == 200:
-                data = response.json()
+            if error:
+                st.error(f"Failed to score image: {error}")
+            else:
                 # persist until next upload or reload
                 data_store = data.copy()
                 data_store["filename"] = uploaded_file.name
@@ -180,13 +207,12 @@ with tabs[1]:
                 st.caption(f"Estimated calculation time: {elapsed:.2f} seconds")
                 if data.get("explanation"):
                     st.markdown("**Why:**  \n" + data.get("explanation").replace("\n", "  \n"))
-            else:
-                st.error("Failed to score image. Is the backend running?")
 
     st.write("### Recent image scoring history")
-    history_img_resp = requests.get(f"{API_URL}/history-images")
-    if history_img_resp.status_code == 200:
-        history_img = history_img_resp.json()
+    history_img, error = request_json("get", "/history-images")
+    if error:
+        st.error(f"Could not load image history from backend: {error}")
+    else:
         if history_img:
             for item in history_img:
                 st.markdown(
@@ -197,8 +223,6 @@ with tabs[1]:
                 st.markdown("---")
         else:
             st.info("No image scoring history yet.")
-    else:
-        st.error("Could not load image history from backend.")
 
 with tabs[2]:
     st.subheader("Video safety assessment")
@@ -239,11 +263,12 @@ with tabs[2]:
             with st.spinner("Calculating video risk score..."):
                 start = time.perf_counter()
                 files = {"file": (uploaded_video.name, uploaded_video.getvalue(), uploaded_video.type)}
-                response = requests.post(f"{API_URL}/score-video", files=files)
+                data, error = request_json("post", "/score-video", files=files)
                 elapsed = time.perf_counter() - start
 
-            if response.status_code == 200:
-                data = response.json()
+            if error:
+                st.error(f"Failed to score video: {error}")
+            else:
                 # persist until next upload or reload
                 data_store = data.copy()
                 data_store["filename"] = uploaded_video.name
@@ -259,5 +284,3 @@ with tabs[2]:
                 st.caption(f"Estimated calculation time: {elapsed:.2f} seconds")
                 if data.get("explanation"):
                     st.markdown("**Why:**  \n" + data.get("explanation").replace("\n", "  \n"))
-            else:
-                st.error("Failed to score video. Is the backend running?")
