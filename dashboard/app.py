@@ -5,7 +5,7 @@ from PIL import Image
 import requests
 import streamlit as st
 
-API_URL = "http://localhost:8000"
+API_URL = "https://aistproject.streamlit.app/"
 
 st.set_page_config(page_title="AI Safety Toolkit", layout="wide")
 st.title("AI Safety Toolkit for Open-Weight Model Outputs")
