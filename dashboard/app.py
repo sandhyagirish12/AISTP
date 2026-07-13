@@ -6,18 +6,29 @@ from PIL import Image
 import requests
 import streamlit as st
 
+from app.database import init_db, save_result, save_image_result, get_history, get_image_history
+from app.safety import score_text as score_text_local
+from app.safety import score_image_bytes as score_image_bytes_local
+from app.safety import score_video_bytes as score_video_bytes_local
+
+
+init_db()
+
 
 def get_api_url() -> str:
     configured_url = os.getenv("API_URL", "").strip() or os.getenv("BACKEND_URL", "").strip()
     if configured_url:
         return configured_url.rstrip("/")
-    return "http://127.0.0.1:8000"
+    return ""
 
 
 API_URL = get_api_url()
 
 
 def request_json(method: str, path: str, **kwargs):
+    if not API_URL:
+        return None, "No remote API configured; using built-in scoring fallback"
+
     url = f"{API_URL}{path}"
     try:
         response = requests.request(method, url, timeout=10, **kwargs)
@@ -33,6 +44,71 @@ def request_json(method: str, path: str, **kwargs):
     except ValueError as exc:
         detail = response.text[:300].strip().replace("\n", " ")
         return None, f"Backend returned invalid JSON: {detail or str(exc)}"
+
+
+def score_text_with_fallback(text: str):
+    if API_URL:
+        data, error = request_json("post", "/score", json={"text": text})
+        if not error:
+            return data, None
+        st.caption(f"Remote backend unavailable; using built-in scoring fallback: {error}")
+
+    data = score_text_local(text)
+    save_result({
+        "text": text,
+        "toxicity": data["toxicity"],
+        "bias": data["bias"],
+        "disallowed": data["disallowed"],
+        "overall_score": data["overall_score"],
+        "label": data["label"],
+    })
+    return data, None
+
+
+def score_image_with_fallback(uploaded_file_name: str, image_bytes: bytes):
+    if API_URL:
+        files = {"file": (uploaded_file_name, image_bytes, "application/octet-stream")}
+        data, error = request_json("post", "/score-image", files=files)
+        if not error:
+            return data, None
+        st.caption(f"Remote backend unavailable; using built-in scoring fallback: {error}")
+
+    data = score_image_bytes_local(image_bytes)
+    save_image_result({
+        "filename": uploaded_file_name,
+        "graphic": data["graphic"],
+        "violence": data["violence"],
+        "nsfw": data["nsfw"],
+        "overall_score": data["overall_score"],
+        "label": data["label"],
+    })
+    return data, None
+
+
+def score_video_with_fallback(uploaded_video_name: str, video_bytes: bytes):
+    if API_URL:
+        files = {"file": (uploaded_video_name, video_bytes, "application/octet-stream")}
+        data, error = request_json("post", "/score-video", files=files)
+        if not error:
+            return data, None
+        st.caption(f"Remote backend unavailable; using built-in scoring fallback: {error}")
+
+    data = score_video_bytes_local(video_bytes)
+    return data, None
+
+
+def history_with_fallback(path: str):
+    if API_URL:
+        data, error = request_json("get", path)
+        if not error:
+            return data
+        st.caption(f"Remote backend unavailable; using local history fallback: {error}")
+
+    if path == "/history":
+        return get_history()
+    if path == "/history-images":
+        return get_image_history()
+    return []
 
 
 st.set_page_config(page_title="AI Safety Toolkit", layout="wide")
@@ -98,7 +174,7 @@ with tabs[0]:
         else:
             with st.spinner("Calculating text risk score..."):
                 start = time.perf_counter()
-                data, error = request_json("post", "/score", json={"text": text_input})
+                data, error = score_text_with_fallback(text_input)
                 elapsed = time.perf_counter() - start
 
             if error:
@@ -120,20 +196,17 @@ with tabs[0]:
                     st.markdown("**Why:**  \n" + data.get("explanation").replace("\n", "  \n"))
 
     st.write("### Recent text scoring history")
-    history, error = request_json("get", "/history")
-    if error:
-        st.error(f"Could not load history from backend: {error}")
+    history = history_with_fallback("/history")
+    if history:
+        for item in history:
+            st.markdown(
+                f"**{item['label'].upper()}** — {item['created_at']}  \n"
+                f"Text: {item['text']}  \n"
+                f"Scores: toxicity={item['toxicity']:.2f}, bias={item['bias']:.2f}, disallowed={item['disallowed']:.2f}, overall={item['overall_score']:.2f}"
+            )
+            st.markdown("---")
     else:
-        if history:
-            for item in history:
-                st.markdown(
-                    f"**{item['label'].upper()}** — {item['created_at']}  \n"
-                    f"Text: {item['text']}  \n"
-                    f"Scores: toxicity={item['toxicity']:.2f}, bias={item['bias']:.2f}, disallowed={item['disallowed']:.2f}, overall={item['overall_score']:.2f}"
-                )
-                st.markdown("---")
-        else:
-            st.info("No text scoring history yet.")
+        st.info("No text scoring history yet.")
 
 with tabs[1]:
     st.subheader("Image safety assessment")
@@ -185,8 +258,7 @@ with tabs[1]:
         if st.button("Score image"):
             with st.spinner("Calculating image risk score..."):
                 start = time.perf_counter()
-                files = {"file": (uploaded_file.name, image_bytes, uploaded_file.type)}
-                data, error = request_json("post", "/score-image", files=files)
+                data, error = score_image_with_fallback(uploaded_file.name, image_bytes)
                 elapsed = time.perf_counter() - start
 
             if error:
@@ -209,20 +281,17 @@ with tabs[1]:
                     st.markdown("**Why:**  \n" + data.get("explanation").replace("\n", "  \n"))
 
     st.write("### Recent image scoring history")
-    history_img, error = request_json("get", "/history-images")
-    if error:
-        st.error(f"Could not load image history from backend: {error}")
+    history_img = history_with_fallback("/history-images")
+    if history_img:
+        for item in history_img:
+            st.markdown(
+                f"**{item['label'].upper()}** — {item['created_at']}  \n"
+                f"Image: {item['filename']}  \n"
+                f"Scores: graphic={item['graphic']:.2f}, violence={item['violence']:.2f}, nsfw={item['nsfw']:.2f}, overall={item['overall_score']:.2f}"
+            )
+            st.markdown("---")
     else:
-        if history_img:
-            for item in history_img:
-                st.markdown(
-                    f"**{item['label'].upper()}** — {item['created_at']}  \n"
-                    f"Image: {item['filename']}  \n"
-                    f"Scores: graphic={item['graphic']:.2f}, violence={item['violence']:.2f}, nsfw={item['nsfw']:.2f}, overall={item['overall_score']:.2f}"
-                )
-                st.markdown("---")
-        else:
-            st.info("No image scoring history yet.")
+        st.info("No image scoring history yet.")
 
 with tabs[2]:
     st.subheader("Video safety assessment")
@@ -262,8 +331,7 @@ with tabs[2]:
         if st.button("Score video"):
             with st.spinner("Calculating video risk score..."):
                 start = time.perf_counter()
-                files = {"file": (uploaded_video.name, uploaded_video.getvalue(), uploaded_video.type)}
-                data, error = request_json("post", "/score-video", files=files)
+                data, error = score_video_with_fallback(uploaded_video.name, uploaded_video.getvalue())
                 elapsed = time.perf_counter() - start
 
             if error:
